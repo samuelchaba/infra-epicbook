@@ -1,3 +1,4 @@
+```yaml
 trigger:
   branches:
     include:
@@ -66,12 +67,13 @@ stages:
         inlineScript: |
           set -euo pipefail
 
+          cd "$(Build.SourcesDirectory)/terraform"
+
           terraform init -input=false \
             -backend-config="bucket=$(tfStateBucket)" \
             -backend-config="key=$(tfStateKey)" \
             -backend-config="region=$(tfStateRegion)" \
             -backend-config="dynamodb_table=$(tfStateLockTable)"
-        workingDirectory: '$(Build.SourcesDirectory)/terraform'
 
     - task: AWSShellScript@1
       displayName: 'Check Terraform Formatting'
@@ -82,8 +84,9 @@ stages:
         inlineScript: |
           set -euo pipefail
 
+          cd "$(Build.SourcesDirectory)/terraform"
+
           terraform fmt -check -recursive
-        workingDirectory: '$(Build.SourcesDirectory)/terraform'
 
     - task: AWSShellScript@1
       displayName: 'Validate Terraform Configuration'
@@ -94,8 +97,9 @@ stages:
         inlineScript: |
           set -euo pipefail
 
+          cd "$(Build.SourcesDirectory)/terraform"
+
           terraform validate
-        workingDirectory: '$(Build.SourcesDirectory)/terraform'
 
 
 # ============================================================
@@ -140,12 +144,13 @@ stages:
         inlineScript: |
           set -euo pipefail
 
+          cd "$(Build.SourcesDirectory)/terraform"
+
           terraform init -input=false \
             -backend-config="bucket=$(tfStateBucket)" \
             -backend-config="key=$(tfStateKey)" \
             -backend-config="region=$(tfStateRegion)" \
             -backend-config="dynamodb_table=$(tfStateLockTable)"
-      workingDirectory: '$(Build.SourcesDirectory)/terraform'
 
     - task: AWSShellScript@1
       displayName: 'Create Terraform Plan'
@@ -156,11 +161,12 @@ stages:
         inlineScript: |
           set -euo pipefail
 
+          cd "$(Build.SourcesDirectory)/terraform"
+
           terraform plan \
             -input=false \
             -var-file="envs/dev.tfvars" \
             -out=tfplan
-      workingDirectory: '$(Build.SourcesDirectory)/terraform'
       env:
         TF_VAR_db_admin_username: $(db_admin_username)
         TF_VAR_db_admin_password: $(db_admin_password)
@@ -175,8 +181,9 @@ stages:
         inlineScript: |
           set -euo pipefail
 
+          cd "$(Build.SourcesDirectory)/terraform"
+
           terraform show -no-color tfplan | tee terraform-plan.txt
-      workingDirectory: '$(Build.SourcesDirectory)/terraform'
 
     - task: PublishPipelineArtifact@1
       displayName: 'Publish Terraform Plan'
@@ -246,12 +253,13 @@ stages:
               inlineScript: |
                 set -euo pipefail
 
+                cd "$(Build.SourcesDirectory)/terraform"
+
                 terraform init -input=false \
                   -backend-config="bucket=$(tfStateBucket)" \
                   -backend-config="key=$(tfStateKey)" \
                   -backend-config="region=$(tfStateRegion)" \
                   -backend-config="dynamodb_table=$(tfStateLockTable)"
-            workingDirectory: '$(Build.SourcesDirectory)/terraform'
 
           - task: AWSShellScript@1
             displayName: 'Apply Reviewed Terraform Plan'
@@ -262,10 +270,11 @@ stages:
               inlineScript: |
                 set -euo pipefail
 
+                cd "$(Build.SourcesDirectory)/terraform"
+
                 terraform apply \
                   -input=false \
                   "$(Pipeline.Workspace)/tfplan/tfplan"
-            workingDirectory: '$(Build.SourcesDirectory)/terraform'
             env:
               TF_VAR_db_admin_username: $(db_admin_username)
               TF_VAR_db_admin_password: $(db_admin_password)
@@ -324,12 +333,13 @@ stages:
         inlineScript: |
           set -euo pipefail
 
+          cd "$(Build.SourcesDirectory)/terraform"
+
           terraform init -input=false \
             -backend-config="bucket=$(tfStateBucket)" \
             -backend-config="key=$(tfStateKey)" \
             -backend-config="region=$(tfStateRegion)" \
             -backend-config="dynamodb_table=$(tfStateLockTable)"
-      workingDirectory: '$(Build.SourcesDirectory)/terraform'
 
     - task: AWSShellScript@1
       displayName: 'Display Required Terraform Outputs'
@@ -339,6 +349,8 @@ stages:
         scriptType: 'inline'
         inlineScript: |
           set -euo pipefail
+
+          cd "$(Build.SourcesDirectory)/terraform"
 
           echo "================================================"
           echo "app_public_ip"
@@ -367,4 +379,4 @@ stages:
           echo "================================================"
           echo "Output stage completed."
           echo "================================================"
-      workingDirectory: '$(Build.SourcesDirectory)/terraform'
+```
