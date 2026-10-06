@@ -1,19 +1,370 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 trigger:
-- main
+  branches:
+    include:
+      - main
 
-pool:
-  vmImage: ubuntu-latest
+  paths:
+    include:
+      - terraform/**
+      - azure-pipelines.yml
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+variables:
+- name: terraformVersion
+  value: '1.13.4'
+
+- name: awsDefaultRegion
+  value: 'ap-south-1'
+
+- name: tfStateBucket
+  value: 'epicbook-tfstate-samuel-2026'
+
+- name: tfStateRegion
+  value: 'ap-south-1'
+
+- name: tfStateKey
+  value: 'epicbook.terraform.tfstate'
+
+- name: tfStateLockTable
+  value: 'epicbook-tfstate-lock'
+
+- group: 'Epicbook-mysql-secrets'
+
+
+# ============================================================
+# STAGE 1 - VALIDATE
+# ============================================================
+
+stages:
+
+- stage: Validate
+  displayName: 'Stage 1 - Validate'
+
+  jobs:
+  - job: ValidateTerraform
+    displayName: 'Validate Terraform Configuration'
+
+    pool:
+      name: 'ubuntu-pool'
+
+    steps:
+
+    - checkout: self
+      displayName: 'Checkout Infrastructure Repository'
+
+    - task: TerraformInstaller@1
+      displayName: 'Install Terraform $(terraformVersion)'
+      inputs:
+        terraformVersion: '$(terraformVersion)'
+
+    - task: AWSShellScript@1
+      displayName: 'Initialize Terraform Backend'
+      inputs:
+        awsCredentials: 'aws-epicbook-connection'
+        regionName: '$(awsDefaultRegion)'
+        scriptType: 'inline'
+        inlineScript: |
+          set -euo pipefail
+
+          terraform init -input=false \
+            -backend-config="bucket=$(tfStateBucket)" \
+            -backend-config="key=$(tfStateKey)" \
+            -backend-config="region=$(tfStateRegion)" \
+            -backend-config="dynamodb_table=$(tfStateLockTable)"
+        workingDirectory: '$(Build.SourcesDirectory)/terraform'
+
+    - task: AWSShellScript@1
+      displayName: 'Check Terraform Formatting'
+      inputs:
+        awsCredentials: 'aws-epicbook-connection'
+        regionName: '$(awsDefaultRegion)'
+        scriptType: 'inline'
+        inlineScript: |
+          set -euo pipefail
+
+          terraform fmt -check -recursive
+        workingDirectory: '$(Build.SourcesDirectory)/terraform'
+
+    - task: AWSShellScript@1
+      displayName: 'Validate Terraform Configuration'
+      inputs:
+        awsCredentials: 'aws-epicbook-connection'
+        regionName: '$(awsDefaultRegion)'
+        scriptType: 'inline'
+        inlineScript: |
+          set -euo pipefail
+
+          terraform validate
+        workingDirectory: '$(Build.SourcesDirectory)/terraform'
+
+
+# ============================================================
+# STAGE 2 - PLAN
+# ============================================================
+
+- stage: Plan
+  displayName: 'Stage 2 - Plan'
+
+  dependsOn: Validate
+  condition: succeeded()
+
+  jobs:
+  - job: TerraformPlan
+    displayName: 'Create Terraform Plan'
+
+    pool:
+      name: 'ubuntu-pool'
+
+    steps:
+
+    - checkout: self
+      displayName: 'Checkout Infrastructure Repository'
+
+    - task: TerraformInstaller@1
+      displayName: 'Install Terraform $(terraformVersion)'
+      inputs:
+        terraformVersion: '$(terraformVersion)'
+
+    - task: DownloadSecureFile@1
+      name: downloadPublicKey
+      displayName: 'Download SSH Public Key'
+      inputs:
+        secureFile: 'agent.pub'
+
+    - task: AWSShellScript@1
+      displayName: 'Initialize Terraform Backend'
+      inputs:
+        awsCredentials: 'aws-epicbook-connection'
+        regionName: '$(awsDefaultRegion)'
+        scriptType: 'inline'
+        inlineScript: |
+          set -euo pipefail
+
+          terraform init -input=false \
+            -backend-config="bucket=$(tfStateBucket)" \
+            -backend-config="key=$(tfStateKey)" \
+            -backend-config="region=$(tfStateRegion)" \
+            -backend-config="dynamodb_table=$(tfStateLockTable)"
+      workingDirectory: '$(Build.SourcesDirectory)/terraform'
+
+    - task: AWSShellScript@1
+      displayName: 'Create Terraform Plan'
+      inputs:
+        awsCredentials: 'aws-epicbook-connection'
+        regionName: '$(awsDefaultRegion)'
+        scriptType: 'inline'
+        inlineScript: |
+          set -euo pipefail
+
+          terraform plan \
+            -input=false \
+            -var-file="envs/dev.tfvars" \
+            -out=tfplan
+      workingDirectory: '$(Build.SourcesDirectory)/terraform'
+      env:
+        TF_VAR_db_admin_username: $(db_admin_username)
+        TF_VAR_db_admin_password: $(db_admin_password)
+        TF_VAR_ssh_public_key_path: $(downloadPublicKey.secureFilePath)
+
+    - task: AWSShellScript@1
+      displayName: 'Display Terraform Plan for Review'
+      inputs:
+        awsCredentials: 'aws-epicbook-connection'
+        regionName: '$(awsDefaultRegion)'
+        scriptType: 'inline'
+        inlineScript: |
+          set -euo pipefail
+
+          terraform show -no-color tfplan | tee terraform-plan.txt
+      workingDirectory: '$(Build.SourcesDirectory)/terraform'
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Terraform Plan'
+      inputs:
+        targetPath: '$(Build.SourcesDirectory)/terraform/tfplan'
+        artifact: 'tfplan'
+        publishLocation: 'pipeline'
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Terraform Plan Review'
+      inputs:
+        targetPath: '$(Build.SourcesDirectory)/terraform/terraform-plan.txt'
+        artifact: 'terraform-plan-review'
+        publishLocation: 'pipeline'
+
+
+# ============================================================
+# STAGE 3 - APPLY
+# ============================================================
+
+- stage: Apply
+  displayName: 'Stage 3 - Apply'
+
+  dependsOn: Plan
+  condition: succeeded()
+
+  jobs:
+  - deployment: ApplyTerraform
+    displayName: 'Apply Approved Terraform Plan'
+
+    pool:
+      name: 'ubuntu-pool'
+
+    environment: 'epicbook-infra-approval'
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+            displayName: 'Checkout Infrastructure Repository'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Terraform Plan'
+            inputs:
+              artifact: 'tfplan'
+              path: '$(Pipeline.Workspace)/tfplan'
+
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform $(terraformVersion)'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          - task: DownloadSecureFile@1
+            name: downloadPublicKey
+            displayName: 'Download SSH Public Key'
+            inputs:
+              secureFile: 'agent.pub'
+
+          - task: AWSShellScript@1
+            displayName: 'Initialize Terraform Backend'
+            inputs:
+              awsCredentials: 'aws-epicbook-connection'
+              regionName: '$(awsDefaultRegion)'
+              scriptType: 'inline'
+              inlineScript: |
+                set -euo pipefail
+
+                terraform init -input=false \
+                  -backend-config="bucket=$(tfStateBucket)" \
+                  -backend-config="key=$(tfStateKey)" \
+                  -backend-config="region=$(tfStateRegion)" \
+                  -backend-config="dynamodb_table=$(tfStateLockTable)"
+            workingDirectory: '$(Build.SourcesDirectory)/terraform'
+
+          - task: AWSShellScript@1
+            displayName: 'Apply Reviewed Terraform Plan'
+            inputs:
+              awsCredentials: 'aws-epicbook-connection'
+              regionName: '$(awsDefaultRegion)'
+              scriptType: 'inline'
+              inlineScript: |
+                set -euo pipefail
+
+                terraform apply \
+                  -input=false \
+                  "$(Pipeline.Workspace)/tfplan/tfplan"
+            workingDirectory: '$(Build.SourcesDirectory)/terraform'
+            env:
+              TF_VAR_db_admin_username: $(db_admin_username)
+              TF_VAR_db_admin_password: $(db_admin_password)
+              TF_VAR_ssh_public_key_path: $(downloadPublicKey.secureFilePath)
+
+          - script: |
+              echo "================================================"
+              echo "Terraform Apply Failed"
+              echo "================================================"
+              echo "Review the 'Apply Reviewed Terraform Plan' step"
+              echo "above for the actual Terraform/AWS error."
+              echo ""
+              echo "Possible causes:"
+              echo "  - AWS permissions"
+              echo "  - AWS service quota"
+              echo "  - AWS resource availability"
+              echo "  - Invalid Terraform configuration"
+              echo "  - Incorrect Terraform variables"
+            displayName: 'Report Terraform Apply Failure'
+            condition: failed()
+
+
+# ============================================================
+# STAGE 4 - OUTPUTS
+# ============================================================
+
+- stage: Outputs
+  displayName: 'Stage 4 - Outputs'
+
+  dependsOn: Apply
+  condition: succeeded()
+
+  jobs:
+  - job: TerraformOutputs
+    displayName: 'Display EpicBook Infrastructure Outputs'
+
+    pool:
+      name: 'ubuntu-pool'
+
+    steps:
+
+    - checkout: self
+      displayName: 'Checkout Infrastructure Repository'
+
+    - task: TerraformInstaller@1
+      displayName: 'Install Terraform $(terraformVersion)'
+      inputs:
+        terraformVersion: '$(terraformVersion)'
+
+    - task: AWSShellScript@1
+      displayName: 'Initialize Terraform Backend'
+      inputs:
+        awsCredentials: 'aws-epicbook-connection'
+        regionName: '$(awsDefaultRegion)'
+        scriptType: 'inline'
+        inlineScript: |
+          set -euo pipefail
+
+          terraform init -input=false \
+            -backend-config="bucket=$(tfStateBucket)" \
+            -backend-config="key=$(tfStateKey)" \
+            -backend-config="region=$(tfStateRegion)" \
+            -backend-config="dynamodb_table=$(tfStateLockTable)"
+      workingDirectory: '$(Build.SourcesDirectory)/terraform'
+
+    - task: AWSShellScript@1
+      displayName: 'Display Required Terraform Outputs'
+      inputs:
+        awsCredentials: 'aws-epicbook-connection'
+        regionName: '$(awsDefaultRegion)'
+        scriptType: 'inline'
+        inlineScript: |
+          set -euo pipefail
+
+          echo "================================================"
+          echo "app_public_ip"
+          echo "================================================"
+          terraform output -raw app_public_ip
+
+          echo ""
+          echo "================================================"
+          echo "backend_ansible_host"
+          echo "================================================"
+          terraform output -raw backend_ansible_host
+
+          echo ""
+          echo "================================================"
+          echo "backend_private_ip"
+          echo "================================================"
+          terraform output -raw backend_private_ip
+
+          echo ""
+          echo "================================================"
+          echo "mysql_fqdn"
+          echo "================================================"
+          terraform output -raw mysql_fqdn
+
+          echo ""
+          echo "================================================"
+          echo "Output stage completed."
+          echo "================================================"
+      workingDirectory: '$(Build.SourcesDirectory)/terraform'
