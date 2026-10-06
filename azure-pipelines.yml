@@ -52,6 +52,11 @@ stages:
     - checkout: self
       displayName: 'Checkout Infrastructure Repository'
 
+    - script: |
+        sudo apt-get update
+        sudo apt-get install -y unzip
+      displayName: 'Install unzip'
+
     - task: TerraformInstaller@1
       displayName: 'Install Terraform $(terraformVersion)'
       inputs:
