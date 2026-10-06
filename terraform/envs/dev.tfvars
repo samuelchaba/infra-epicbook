@@ -8,6 +8,6 @@ instance_type         = "t3.micro"
 db_instance_class     = "db.t3.micro"
 
 allowed_admin_ip  = "102.90.125.177/32"
-pipeline_agent_ip = "35.154.80.51/32"
+pipeline_agent_ip = "43.205.145.50/32"
 backend_app_port  = 8080
 db_name           = "epicbook"
