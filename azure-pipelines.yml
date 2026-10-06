@@ -265,18 +265,6 @@ stages:
                   -backend-config="region=$(tfStateRegion)" \
                   -backend-config="dynamodb_table=$(tfStateLockTable)"
 
-          - script: |
-    if [ -n "$TF_VAR_db_admin_username" ]; then
-      echo "RDS username variable is present"
-      echo "Username length: ${#TF_VAR_db_admin_username}"
-      echo "Username value: <$TF_VAR_db_admin_username>"
-    else
-      echo "ERROR: TF_VAR_db_admin_username is empty or not available"
-      exit 1
-    fi
-  displayName: 'Check RDS Username Variable'
-  env:
-    TF_VAR_db_admin_username: $(db_admin_username)
           
           - task: AWSShellScript@1
             displayName: 'Apply Reviewed Terraform Plan'
