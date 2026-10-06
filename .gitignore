@@ -4,7 +4,7 @@
 # .tfstate files
 *.tfstate
 *.tfstate.*
-!terraform/envs/dev.tfvars
+
 
 # Crash log files
 crash.log
@@ -16,6 +16,9 @@ crash.*.log
 # to change depending on the environment.
 *.tfvars
 *.tfvars.json
+
+!terraform/envs/
+!terraform/envs/dev.tfvars
 
 # Ignore override files as they are usually used to override resources locally and so
 # are not checked in
